@@ -29,3 +29,16 @@ func NewBlockChain() *BlockChain {
 		chain: []Block{genesis},
 	}
 }
+
+// PushBlock pushes the provided block to the blockchain.
+func (b *BlockChain) PushBlock(block Block) error {
+	if err := ValidateBlock(block, b.chain[len(b.chain)-1]); err != nil {
+		return err
+	}
+
+	// TODO: chain is unexported, so technically it shouldn't be exposed
+	// outside, but here everything is under the same main package.
+	// Move this to another pkg?
+	b.chain = append(b.chain, block)
+	return nil
+}

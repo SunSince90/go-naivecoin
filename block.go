@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"time"
 )
 
@@ -47,4 +48,21 @@ func CalculateHash(block Block) []byte {
 
 	hash := sha256.Sum256(header)
 	return hash[:]
+}
+
+// ValidateBlock checks if the block is valid and returns an error if not.
+func ValidateBlock(block, prevBlock Block) error {
+	if block.Index != prevBlock.Index+1 {
+		return fmt.Errorf("index is not valid")
+	}
+
+	if !bytes.Equal(block.PreviousBlockHash, prevBlock.Hash) {
+		return fmt.Errorf("previous block hash does not match")
+	}
+
+	if !bytes.Equal(block.Hash, CalculateHash(block)) {
+		return fmt.Errorf("hash is invalid")
+	}
+
+	return nil
 }
