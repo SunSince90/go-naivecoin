@@ -10,17 +10,17 @@ import (
 // Block is a block that will be mined/forged and inserted into our Blockchain.
 type Block struct {
 	// Index of this block.
-	Index int64
+	Index int64 `json:"index"`
 	// Timestamp of when this block was created.
-	Timestamp int64
+	Timestamp int64 `json:"timestamp"`
 	// PreviousBlockHash is the hash of the previous block, i.e. the block
 	// with an Index = thisIndex - 1.
-	PreviousBlockHash []byte
+	PreviousBlockHash []byte `json:"previousBlockHash"`
 	// Data that we want to store in this block.
 	// TODO: on future commits, we may want to store *encrypted* data here.
-	Data string
+	Data string `json:"data"`
 	// Hash of this block.
-	Hash []byte
+	Hash []byte `json:"hash"`
 }
 
 // NewBlock creates a new block with the given parameters, creates a hash

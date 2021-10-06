@@ -31,6 +31,8 @@ func NewBlockChain() *BlockChain {
 }
 
 // PushBlock pushes the provided block to the blockchain.
+//
+// TODO: pass a Block or a *Block?
 func (b *BlockChain) PushBlock(block Block) error {
 	if err := ValidateBlock(block, b.chain[len(b.chain)-1]); err != nil {
 		return err
