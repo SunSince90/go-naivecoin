@@ -1,77 +1,89 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
-	"time"
 
-	"github.com/gofiber/fiber/v2"
 	"github.com/rs/zerolog"
 )
 
-var blockchain *BlockChain
-
-func handleGetBlocks(c *fiber.Ctx) error {
-	if blockchain == nil {
-		c.Send([]byte("blockchain is not initialized"))
-		return c.SendStatus(fiber.StatusInternalServerError)
-	}
-
-	return c.JSON(blockchain.chain)
-}
-
-func handlePostBlocks(c *fiber.Ctx) error {
-	if blockchain == nil {
-		c.Send([]byte("blockchain is not initialized"))
-		return c.SendStatus(fiber.StatusInternalServerError)
-	}
-
-	if len(c.Body()) == 0 {
-		c.Send([]byte("body cannot be empty"))
-		return c.SendStatus(fiber.ErrBadRequest.Code)
-	}
-
-	block := NewBlock(string(c.Body()), blockchain.chain[len(blockchain.chain)-1])
-	if err := blockchain.PushBlock(*block); err != nil {
-		c.Send([]byte(err.Error()))
-		return c.SendStatus(fiber.ErrBadRequest.Code)
-	}
-
-	return c.SendStatus(fiber.StatusOK)
-}
+var (
+	log        zerolog.Logger
+	blockchain *BlockChain
+	peers      map[string]string
+)
 
 func main() {
-	log := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	log = zerolog.New(os.Stderr).With().Timestamp().Logger()
 	log.Info().Msg("starting...")
 
+	myself := os.Getenv("NAME")
+	ns := os.Getenv("NAMESPACE")
+	if ns == "" || myself == "" {
+		log.Error().Msg("could not find environment variables")
+		os.Exit(1)
+	}
+
 	blockchain = NewBlockChain()
-
-	app := fiber.New(fiber.Config{ReadTimeout: 30 * time.Second})
-
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.SendString("Hello, World 👋!")
-	})
-	app.Get("/blocks", handleGetBlocks)
-	app.Post("/blocks", handlePostBlocks)
+	server := NewServer()
+	peers = make(map[string]string) // TODO: improve this
 
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
+	wg := sync.WaitGroup{}
+	wg.Add(2)
 
+	// -- start the server
 	go func() {
-		defer close(stopChan)
-		err := app.Listen(":8080")
+		defer wg.Done()
+		err := server.Listen(":8080")
 		if err != nil {
 			log.Err(err).Msg("error while listening")
+			return
 		}
 	}()
 
+	// -- start the manager for our pod controller
+	mgrCtx, mgrCanc := context.WithCancel(context.Background())
+	go func() {
+		defer wg.Done()
+
+		mgr, err := GetControllerManager(ns)
+		if err != nil {
+			log.Err(err).Msg("error while creating controller manager")
+			stopChan <- syscall.SIGINT
+			return
+		}
+
+		_, err = SetPodController(mgr, myself)
+		if err != nil {
+			log.Err(err).Msg("error while creating pod controller")
+			stopChan <- syscall.SIGINT
+			return
+		}
+
+		// We're handling graceful shutdown on our own, so that's why we are
+		// using our custom context and not just copy-pasting the example
+		// from controller-runtime.
+		if err := mgr.Start(mgrCtx); err != nil {
+			log.Err(err).Msg("error while starting controller manager")
+		}
+	}()
+
+	// -- graceful shutdown
 	<-stopChan
+
 	fmt.Println()
 	log.Info().Msg("exit requested")
 	log.Info().Msg("shutting down server...")
-	app.Shutdown()
+
+	mgrCanc()
+	server.Shutdown()
+	wg.Wait()
 
 	log.Info().Msg("good bye!")
 }
