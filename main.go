@@ -30,19 +30,28 @@ func main() {
 
 	blockchain = NewBlockChain()
 	server := NewServer()
+	probes := NewProbesServer()
 	peers = make(map[string]string) // TODO: improve this
 
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
 	wg := sync.WaitGroup{}
-	wg.Add(2)
+	wg.Add(3)
 
 	// -- start the server
 	go func() {
 		defer wg.Done()
-		err := server.Listen(":8080")
-		if err != nil {
+		if err := server.Listen(":8080"); err != nil {
 			log.Err(err).Msg("error while listening")
+			return
+		}
+	}()
+
+	// -- start the probes server
+	go func() {
+		defer wg.Done()
+		if err := probes.Listen(":8081"); err != nil {
+			log.Err(err).Msg("error while listening for probes requests")
 			return
 		}
 	}()
@@ -83,6 +92,7 @@ func main() {
 
 	mgrCanc()
 	server.Shutdown()
+	probes.Shutdown()
 	wg.Wait()
 
 	log.Info().Msg("good bye!")

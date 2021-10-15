@@ -45,3 +45,27 @@ func NewServer() *fiber.App {
 	app.Post("/blocks", handlePostBlocks)
 	return app
 }
+
+// NewProbesServer returns a server that that implements probes for Kubernetes.
+// This server needs to run on a different port from the one from NewServer().
+func NewProbesServer() *fiber.App {
+	app := fiber.New(fiber.Config{ReadTimeout: 5 * time.Second})
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.SendString("Hello, World 👋!")
+	})
+	app.Get("/healthz", func(c *fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusOK)
+	})
+	app.Post("/readyz", func(c *fiber.Ctx) error {
+		// TODO: guard this with a sync.Mutex?
+		// Having probes will prevent peers from adding each other if they
+		// haven't generated the genesis block yet, because they won't be
+		// flagged as ready.
+		if len(blockchain.chain) > 0 {
+			return c.SendStatus(fiber.StatusOK)
+		}
+
+		return c.SendStatus(fiber.ErrInternalServerError.Code)
+	})
+	return app
+}
