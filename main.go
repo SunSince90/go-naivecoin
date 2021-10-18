@@ -14,7 +14,6 @@ import (
 var (
 	log        zerolog.Logger
 	blockchain *BlockChain
-	peers      map[string]string
 )
 
 func main() {
@@ -31,14 +30,20 @@ func main() {
 	blockchain = NewBlockChain()
 	server := NewServer()
 	probes := NewProbesServer()
-	peers = make(map[string]string) // TODO: improve this
+	peerEvents := make(chan PeerEvent, 100)
+	peersMgr := NewPeersManager()
 
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
 	wg := sync.WaitGroup{}
-	wg.Add(3)
+	wg.Add(4)
 
 	// -- start the server
+	go func() {
+		defer wg.Done()
+		peersMgr.ListenPeerEvents(peerEvents)
+	}()
+
 	go func() {
 		defer wg.Done()
 		if err := server.Listen(":8080"); err != nil {
@@ -68,7 +73,8 @@ func main() {
 			return
 		}
 
-		_, err = SetPodController(mgr, myself)
+		podEventHandler := NewPodEventHandler(myself, peerEvents)
+		_, err = SetPodController(mgr, podEventHandler)
 		if err != nil {
 			log.Err(err).Msg("error while creating pod controller")
 			stopChan <- syscall.SIGINT
@@ -93,6 +99,7 @@ func main() {
 	mgrCanc()
 	server.Shutdown()
 	probes.Shutdown()
+	close(peerEvents)
 	wg.Wait()
 
 	log.Info().Msg("good bye!")

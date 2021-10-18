@@ -16,6 +16,7 @@ COPY blockchain.go blockchain.go
 COPY utils.go utils.go
 COPY controller.go controller.go
 COPY server.go server.go
+COPY peer.go peer.go
 
 # Build
 # TODO: maybe do also for others archs
