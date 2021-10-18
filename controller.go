@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/util/workqueue"
@@ -33,23 +34,30 @@ func GetControllerManager(namespace string) (manager.Manager, error) {
 	return mgr, nil
 }
 
-// PodEventHandler is a structure that handles event related to pods.
 type PodEventHandler struct {
-	myself string
+	myself     string
+	peerEvents chan PeerEvent
+
+	// Some times events are so fast that we may execute a function for the
+	// same peer twice. Therefore, we need a way to synchronize this
+	lock sync.Mutex
 }
 
-// NewPodEventHandler returns a new PodEventHandler.
-func NewPodEventHandler(myself string) *PodEventHandler {
+func NewPodEventHandler(myself string, peerEvents chan PeerEvent) *PodEventHandler {
 	return &PodEventHandler{
-		myself: myself,
+		myself:     myself,
+		peerEvents: peerEvents,
+		lock:       sync.Mutex{},
 	}
 }
 
 // Create handles pod Create events.
 func (p *PodEventHandler) Create(ce event.CreateEvent, _ workqueue.RateLimitingInterface) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
 	pod, ok := ce.Object.(*corev1.Pod)
 	if !ok {
-		// TODO: log this
 		log.Error().Str("event", "Create").Msg("skipping: could not successfully parse event")
 		return
 	}
@@ -73,11 +81,20 @@ func (p *PodEventHandler) Create(ce event.CreateEvent, _ workqueue.RateLimitingI
 
 	l.Info().Msg("found a new peer")
 
-	// TODO: send event
+	p.peerEvents <- PeerEvent{
+		EventType: EventNewPeer,
+		Peer: &Peer{
+			Name: pod.Name,
+			IP:   pod.Status.PodIP,
+		},
+	}
 }
 
 // Update handes Update events.
-func (p *PodEventHandler) Update(ue event.UpdateEvent, _ workqueue.RateLimitingInterface) {
+func (p *PodEventHandler) Update(ue event.UpdateEvent, w workqueue.RateLimitingInterface) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
 	currPod, currOk := ue.ObjectNew.(*corev1.Pod)
 	prevPod, prevOk := ue.ObjectOld.(*corev1.Pod)
 
@@ -104,7 +121,17 @@ func (p *PodEventHandler) Update(ue event.UpdateEvent, _ workqueue.RateLimitingI
 
 	if currPod.DeletionTimestamp != nil {
 		// This is the way to know when a resource is being deleted.
-		// TODO: delete the pod
+		// We're not calling p.Delete because we're holding a lock and
+		// we're relasing it with defer. So Delete wouln't be able to get
+		// it.
+		p.peerEvents <- PeerEvent{
+			EventType: EventDeadPeer,
+			Peer: &Peer{
+				Name: currPod.Name,
+				IP:   currPod.Status.PodIP,
+			},
+		}
+		return
 	}
 
 	if currPod.Status.Phase == prevPod.Status.Phase {
@@ -112,28 +139,44 @@ func (p *PodEventHandler) Update(ue event.UpdateEvent, _ workqueue.RateLimitingI
 		return
 	}
 
-	if currPod.Status.Phase == corev1.PodRunning {
-		l.Info().Msg("found a new running peer")
-	} else {
-		l.Info().Msg("found a not running peer")
+	peerEvent := PeerEvent{
+		Peer: &Peer{
+			Name: currPod.Name,
+			IP:   currPod.Status.PodIP,
+		},
 	}
 
-	// TODO: add event
+	if currPod.Status.Phase == corev1.PodRunning {
+		l.Info().Msg("found a new running peer")
+		peerEvent.EventType = EventNewPeer
+	} else {
+		l.Info().Msg("found a not running peer")
+		peerEvent.EventType = EventDeadPeer
+	}
+
+	p.peerEvents <- peerEvent
 }
 
 // Delete handles pod Delete events.
 func (p *PodEventHandler) Delete(de event.DeleteEvent, _ workqueue.RateLimitingInterface) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
 	pod, ok := de.Object.(*corev1.Pod)
 	if !ok {
-		// TODO: log this
 		log.Error().Str("event", "Delete").Msg("skipping: could not successfully parse event")
 		return
 	}
 
 	log.Info().Msg("found dead peer")
 
-	// TODO: add event
-	_ = pod
+	p.peerEvents <- PeerEvent{
+		EventType: EventDeadPeer,
+		Peer: &Peer{
+			Name: pod.Name,
+			IP:   pod.Status.PodIP,
+		},
+	}
 }
 
 // Generic handles pod events that are neither Create, Update or Delete.
