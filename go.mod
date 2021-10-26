@@ -3,7 +3,9 @@ module github.com/SunSince90/go-naivecoin
 go 1.17
 
 require (
+	github.com/fasthttp/websocket v1.4.3-rc.9
 	github.com/gofiber/fiber/v2 v2.20.1
+	github.com/gofiber/websocket/v2 v2.0.12
 	github.com/rs/zerolog v1.25.0
 	k8s.io/api v0.22.2
 	k8s.io/client-go v0.22.2
@@ -36,6 +38,7 @@ require (
 	github.com/prometheus/client_model v0.2.0 // indirect
 	github.com/prometheus/common v0.26.0 // indirect
 	github.com/prometheus/procfs v0.6.0 // indirect
+	github.com/savsgio/gotils v0.0.0-20210921075833-21a6215cb0e4 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.30.0 // indirect
