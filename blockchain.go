@@ -2,26 +2,28 @@ package main
 
 import (
 	"fmt"
-	"time"
+	"sync"
 )
 
 const (
 	genesisBlockData string = "this is the genesis block!"
 )
 
-// BlockChain simply contains a slice of Block.
+// BlockChain simply contains a slice of Block-s.
 //
 // TODO: explore persistency on future commits.
 // TODO: make this a singleton?
 type BlockChain struct {
 	chain []Block
+
+	lock sync.Mutex
 }
 
 // NewBlockChain returns a new block chain.
 func NewBlockChain() *BlockChain {
 	genesis := Block{
 		Index:             0,
-		Timestamp:         time.Now().Unix(),
+		Timestamp:         0, // Setting this as 0 will prevent errors when we get blocks from other peers
 		PreviousBlockHash: []byte{},
 		Data:              genesisBlockData,
 		Hash:              []byte{},
@@ -30,6 +32,7 @@ func NewBlockChain() *BlockChain {
 
 	return &BlockChain{
 		chain: []Block{genesis},
+		lock:  sync.Mutex{},
 	}
 }
 
@@ -37,6 +40,9 @@ func NewBlockChain() *BlockChain {
 //
 // TODO: pass a Block or a *Block?
 func (b *BlockChain) PushBlock(block Block) error {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	if err := ValidateBlock(block, b.chain[len(b.chain)-1]); err != nil {
 		return err
 	}
@@ -68,7 +74,11 @@ func ValidateChain(chain []Block) error {
 	return nil
 }
 
+// ReplaceWith replaces the chain with the one provided as argument.
 func (b *BlockChain) ReplaceWith(newChain []Block) error {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	// ValidateChain may take a while, so we better check the lens first
 	if len(newChain) <= len(b.chain) {
 		return fmt.Errorf("new chain is not longer than the current one")
@@ -79,5 +89,25 @@ func (b *BlockChain) ReplaceWith(newChain []Block) error {
 	}
 
 	b.chain = newChain
+	log.Info().Msg("chain replaced")
+
 	return nil
+}
+
+// Length returns the current length of the chain.
+// This is mostly used by Kubernetes probes to signal this pod as Ready, as
+// this is also guarded by locks.
+func (b *BlockChain) Length() int {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	return len(b.chain)
+}
+
+// GetLastBlock returns the current last block on the chain.
+func (b *BlockChain) GetLastBlock() Block {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	return b.chain[len(b.chain)-1]
 }
