@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 
+	npb "github.com/SunSince90/go-naivecoin/pkg/networking/pb"
 	"github.com/rs/zerolog"
+	"google.golang.org/grpc"
 )
 
 var (
@@ -18,45 +21,66 @@ var (
 
 func main() {
 	log = zerolog.New(os.Stderr).With().Timestamp().Logger()
-	log.Info().Msg("starting...")
 
 	myself := os.Getenv("NAME")
+	myIP := os.Getenv("IP")
 	ns := os.Getenv("NAMESPACE")
-	if ns == "" || myself == "" {
+	if ns == "" || myself == "" || myIP == "" {
 		log.Error().Msg("could not find environment variables")
 		os.Exit(1)
 	}
 
-	blockchain = NewBlockChain()
-	server := NewServer()
-	probes := NewProbesServer()
+	log.Info().Str("my-name", myself).Msg("starting...")
+
 	peerEvents := make(chan PeerEvent, 100)
-	peersMgr := NewPeersManager()
+	genBlock := make(chan Block, 10)
+	blockchain = NewBlockChain()
+	server := NewNodeServer(genBlock)
+	probes := NewProbesServer()
+	peersMgr := NewPeersManager(myself, myIP)
+	commServer := NewCommunicationServer(genBlock)
 
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
 	wg := sync.WaitGroup{}
-	wg.Add(4)
+	wg.Add(5)
 
-	// -- start the server
 	go func() {
 		defer wg.Done()
+		log.Info().Msg("listening for peer events...")
 		peersMgr.ListenPeerEvents(peerEvents)
 	}()
 
 	go func() {
 		defer wg.Done()
-		if err := server.Listen(":8080"); err != nil {
+		log.Info().Msg("serving server on port 8080...")
+		if err := server.FiberApp.Listen(":8080"); err != nil {
 			log.Err(err).Msg("error while listening")
 			return
 		}
 	}()
 
-	// -- start the probes server
 	go func() {
 		defer wg.Done()
+		log.Info().Msg("serving probes on port 8081...")
 		if err := probes.Listen(":8081"); err != nil {
 			log.Err(err).Msg("error while listening for probes requests")
+			return
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", myIP, 8082))
+		if err != nil {
+			log.Err(err).Msg("could not start communication server")
+			return
+		}
+		s := grpc.NewServer()
+		npb.RegisterPeerCommunicationServer(s, commServer)
+		log.Info().Msg("serving peer communication server on port 8082...")
+		if err := s.Serve(lis); err != nil {
+			log.Err(err).Msg("could not serve communication server")
 			return
 		}
 	}()
@@ -97,9 +121,10 @@ func main() {
 	log.Info().Msg("shutting down server...")
 
 	mgrCanc()
-	server.Shutdown()
+	server.FiberApp.Shutdown()
 	probes.Shutdown()
 	close(peerEvents)
+	close(genBlock)
 	wg.Wait()
 
 	log.Info().Msg("good bye!")
