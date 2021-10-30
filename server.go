@@ -1,11 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	websocket "github.com/gofiber/websocket/v2"
 )
 
 // NodeServer is the server that is implemented by this pod and that can be
@@ -39,17 +37,6 @@ func NewNodeServer(genBlock chan Block) *NodeServer {
 	app.Get("/blocks/last", server.handleGetLastBlock)
 	app.Post("/blocks", server.handlePostBlocks)
 
-	app.Use("/connect", func(c *fiber.Ctx) error {
-		// IsWebSocketUpgrade returns true if the client
-		// requested upgrade to the WebSocket protocol.
-		if websocket.IsWebSocketUpgrade(c) {
-			return c.Next()
-		}
-		return fiber.ErrUpgradeRequired
-	})
-
-	app.Get("/connect", websocket.New(server.handleWebSocket))
-
 	return server
 }
 
@@ -76,57 +63,6 @@ func (n *NodeServer) handlePostBlocks(c *fiber.Ctx) error {
 
 func (n *NodeServer) handleGetLastBlock(c *fiber.Ctx) error {
 	return c.JSON(blockchain.GetLastBlock())
-}
-
-func (n *NodeServer) handleWebSocket(c *websocket.Conn) {
-	var (
-		mt  int
-		msg []byte
-		err error
-	)
-	defer c.Close()
-
-	for {
-		var peerMsg PeerMessage
-		mt, msg, err = c.ReadMessage()
-		if err != nil {
-			log.Err(err).Msg("error while reading message")
-			continue
-		}
-
-		switch mt {
-		case websocket.CloseGoingAway, websocket.CloseMessage, websocket.CloseNormalClosure:
-			log.Info().Msg("received close message from peer")
-			c.Close()
-		case websocket.BinaryMessage:
-			log.Info().Msg("received message from peer")
-		default:
-			log.Error().Msg("cannot understand message from peer: unrecognized message type")
-			continue
-		}
-
-		if err := json.Unmarshal(msg, &peerMsg); err != nil {
-			log.Err(err).Msg("could not unmarshal message from peer")
-			continue
-		}
-
-		if peerMsg.MessageType != SendLastBlock {
-			// TODO: will there be any other message types?
-			log.Error().Str("peer-message-type", string(peerMsg.MessageType)).Msg("unrecognized peer message type")
-			continue
-		}
-
-		if len(peerMsg.Blocks) == 0 {
-			log.Error().Msg("peer sent no blocks")
-			continue
-		}
-
-		if err := blockchain.PushBlock(peerMsg.Blocks[0]); err != nil {
-			log.Err(err).Msg("error while adding peer's block to my blockchain")
-			continue
-		}
-		log.Info().Msg("block parsed and added")
-	}
 }
 
 // NewProbesServer returns a server that that implements probes for Kubernetes.
