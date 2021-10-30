@@ -1,6 +1,8 @@
 package main
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+)
 
 // FromInt64ToBytes casts an int64 number to a slice of bytes ([]byte).
 //

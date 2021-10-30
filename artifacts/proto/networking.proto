@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+option go_package = "github.com/SunSince90/go-naivecoin/networking";
+package networking;
+
+service PeerCommunication {
+    rpc GetLatestBlock (GetLatestBlockParams) returns (Block) {}
+    rpc GetFullBlockChain(GetFullBlockChainParams) returns (BlockChain) {}
+    rpc SubscribeNewBlocks(SubscribeNewBlocksParams) returns (stream Block) {}
+}
+
+message Block {
+    int64 index = 1;
+    int64 timestamp = 2;
+    bytes previousBlockHash = 3;
+    string data = 4;
+    bytes hash = 5;
+}
+
+message BlockChain {
+    repeated Block blocks = 1;
+}
+
+message GetLatestBlockParams {}
+message GetFullBlockChainParams{}
+message SubscribeNewBlocksParams{}
+
+

@@ -17,6 +17,8 @@ COPY utils.go utils.go
 COPY controller.go controller.go
 COPY server.go server.go
 COPY peer.go peer.go
+COPY networking_server.go networking_server.go
+COPY pkg/ pkg/
 
 # Build
 # TODO: maybe do also for others archs

@@ -64,22 +64,18 @@ func (p *PodEventHandler) Create(ce event.CreateEvent, _ workqueue.RateLimitingI
 
 	l := log.With().Str("name", pod.Name).Str("ip", pod.Status.PodIP).Logger()
 	if pod.Name == p.myself {
-		l.Info().Msg("ignoring because it is me")
 		return
 	}
 
 	if val, exists := pod.Labels["app"]; !exists || val != "go-naivecoin" {
-		l.Info().Msg("ignoring because it is not related to go-naivecoin")
 		return
 	}
 
 	if pod.Status.Phase != corev1.PodRunning {
-		// TODO: only verbose
-		l.Info().Msg("ignoring because it is not related to go-naivecoin")
 		return
 	}
 
-	l.Info().Msg("found a new peer")
+	l.Info().Msg("found a new running peer")
 
 	p.peerEvents <- PeerEvent{
 		EventType: EventNewPeer,
@@ -105,25 +101,27 @@ func (p *PodEventHandler) Update(ue event.UpdateEvent, w workqueue.RateLimitingI
 
 	l := log.With().Str("name", currPod.Name).Str("ip", currPod.Status.PodIP).Logger()
 	if currPod.Name == p.myself {
-		l.Info().Msg("ignoring because it is me")
 		return
 	}
 
 	if val, exists := currPod.Labels["app"]; !exists || val != "go-naivecoin" {
-		l.Info().Msg("ignoring because it is not related to go-naivecoin")
 		return
 	}
 
 	if len(currPod.Status.PodIP) == 0 {
-		l.Info().Msg("skipping: pod does not have an IP")
 		return
 	}
 
 	if currPod.DeletionTimestamp != nil {
+		if prevPod.DeletionTimestamp != nil {
+			return
+		}
+
 		// This is the way to know when a resource is being deleted.
 		// We're not calling p.Delete because we're holding a lock and
 		// we're relasing it with defer. So Delete wouln't be able to get
 		// it.
+		l.Info().Msg("peer is dying, removing...")
 		p.peerEvents <- PeerEvent{
 			EventType: EventDeadPeer,
 			Peer: &Peer{
@@ -135,7 +133,6 @@ func (p *PodEventHandler) Update(ue event.UpdateEvent, w workqueue.RateLimitingI
 	}
 
 	if currPod.Status.Phase == prevPod.Status.Phase {
-		log.Info().Msg("same status as before")
 		return
 	}
 
@@ -168,8 +165,7 @@ func (p *PodEventHandler) Delete(de event.DeleteEvent, _ workqueue.RateLimitingI
 		return
 	}
 
-	log.Info().Msg("found dead peer")
-
+	log.Info().Str("name", pod.Name).Str("ip", pod.Status.PodIP).Msg("found dead peer")
 	p.peerEvents <- PeerEvent{
 		EventType: EventDeadPeer,
 		Peer: &Peer{
