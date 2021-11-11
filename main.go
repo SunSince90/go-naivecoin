@@ -9,37 +9,52 @@ import (
 	"sync"
 	"syscall"
 
-	npb "github.com/SunSince90/go-naivecoin/pkg/networking/pb"
+	"github.com/SunSince90/go-naivecoin/pkg/block"
+	"github.com/SunSince90/go-naivecoin/pkg/controllers"
+	"github.com/SunSince90/go-naivecoin/pkg/pb"
+	"github.com/SunSince90/go-naivecoin/pkg/peers"
+	"github.com/SunSince90/go-naivecoin/pkg/servers"
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
 )
 
-var (
-	log        zerolog.Logger
-	blockchain *BlockChain
-)
-
 func main() {
-	log = zerolog.New(os.Stderr).With().Timestamp().Logger()
+	os.Exit(run())
+}
 
-	myself := os.Getenv("NAME")
-	myIP := os.Getenv("IP")
-	ns := os.Getenv("NAMESPACE")
-	if ns == "" || myself == "" || myIP == "" {
-		log.Error().Msg("could not find environment variables")
-		os.Exit(1)
+func run() int {
+	log := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	log.Info().Msg("starting...")
+
+	myip := os.Getenv("IP")
+	if myip == "" {
+		log.Error().Msg("could not find ip from environment variables")
+		return 1
 	}
 
-	log.Info().Str("my-name", myself).Msg("starting...")
+	// create channels
+	peerEvents := make(chan *peers.PeerEvent, 100)
+	genBlock := make(chan *pb.Block, 10)
 
-	peerEvents := make(chan PeerEvent, 100)
-	genBlock := make(chan Block, 10)
-	blockchain = NewBlockChain()
-	server := NewNodeServer(genBlock)
-	probes := NewProbesServer()
-	peersMgr := NewPeersManager(myself, myIP)
-	commServer := NewCommunicationServer(genBlock)
+	// create structures
+	blockchain := block.NewBlockChain()
+	publicServer := servers.NewPublicServer(blockchain, genBlock)
+	probesServer := servers.NewProbesServer(blockchain)
+	grpcServer := grpc.NewServer()
+	peerManager := peers.NewPeersManager(blockchain)
+	mgr, err := controllers.NewControllerManager()
+	if err != nil {
+		log.Err(err).Msg("error while creating a controller manager")
+		return 2
+	}
+	_, err = controllers.NewPodReconciler(mgr, peerEvents)
+	if err != nil {
+		log.Err(err).Msg("error while creating the pod controller")
+		return 3
+	}
 
+	// run the services
+	ctx, canc := context.WithCancel(context.Background())
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
 	wg := sync.WaitGroup{}
@@ -48,84 +63,74 @@ func main() {
 	go func() {
 		defer wg.Done()
 		log.Info().Msg("listening for peer events...")
-		peersMgr.ListenPeerEvents(peerEvents)
+		peerManager.ListenPeerEvents(peerEvents)
 	}()
 
 	go func() {
 		defer wg.Done()
-		log.Info().Msg("serving server on port 8080...")
-		if err := server.FiberApp.Listen(":8080"); err != nil {
-			log.Err(err).Msg("error while listening")
-			return
+		if err := publicServer.FiberApp.Listen(":8080"); err != nil {
+			log.Err(err).Msg("error while serving public server")
+		}
+
+		close(genBlock)
+	}()
+
+	go func() {
+		defer wg.Done()
+		if err := probesServer.FiberApp.Listen(":8081"); err != nil {
+			log.Err(err).Msg("error while serving public server")
 		}
 	}()
 
 	go func() {
 		defer wg.Done()
-		log.Info().Msg("serving probes on port 8081...")
-		if err := probes.Listen(":8081"); err != nil {
-			log.Err(err).Msg("error while listening for probes requests")
-			return
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", myIP, 8082))
+		lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", myip, 8082))
 		if err != nil {
 			log.Err(err).Msg("could not start communication server")
 			return
 		}
-		s := grpc.NewServer()
-		npb.RegisterPeerCommunicationServer(s, commServer)
-		log.Info().Msg("serving peer communication server on port 8082...")
-		if err := s.Serve(lis); err != nil {
+		log.Info().Msg("serving peer communications...")
+
+		commServer := servers.NewPeerCommunicationServer(blockchain, genBlock)
+		pb.RegisterPeerCommunicationServer(grpcServer, commServer)
+		if err := grpcServer.Serve(lis); err != nil {
 			log.Err(err).Msg("could not serve communication server")
 			return
 		}
 	}()
 
-	// -- start the manager for our pod controller
-	mgrCtx, mgrCanc := context.WithCancel(context.Background())
 	go func() {
 		defer wg.Done()
+		log.Info().Msg("starting pod controller...")
 
-		mgr, err := GetControllerManager(ns)
-		if err != nil {
-			log.Err(err).Msg("error while creating controller manager")
-			stopChan <- syscall.SIGINT
-			return
-		}
-
-		podEventHandler := NewPodEventHandler(myself, peerEvents)
-		_, err = SetPodController(mgr, podEventHandler)
-		if err != nil {
-			log.Err(err).Msg("error while creating pod controller")
-			stopChan <- syscall.SIGINT
-			return
-		}
-
-		// We're handling graceful shutdown on our own, so that's why we are
-		// using our custom context and not just copy-pasting the example
-		// from controller-runtime.
-		if err := mgr.Start(mgrCtx); err != nil {
+		if err := mgr.Start(ctx); err != nil {
 			log.Err(err).Msg("error while starting controller manager")
 		}
+
+		close(peerEvents)
 	}()
 
-	// -- graceful shutdown
 	<-stopChan
+	canc()
 
 	fmt.Println()
 	log.Info().Msg("exit requested")
-	log.Info().Msg("shutting down server...")
 
-	mgrCanc()
-	server.FiberApp.Shutdown()
-	probes.Shutdown()
-	close(peerEvents)
-	close(genBlock)
+	log.Info().Msg("shutting down public server...")
+
+	if err := publicServer.FiberApp.Shutdown(); err != nil {
+		log.Err(err).Msg("error while shutting down public server")
+	}
+
+	log.Info().Msg("shutting down probes server...")
+	if err := probesServer.FiberApp.Shutdown(); err != nil {
+		log.Err(err).Msg("error while shutting down probes server")
+	}
+
+	log.Info().Msg("shutting down peers server...")
+	grpcServer.GracefulStop()
+
 	wg.Wait()
-
-	log.Info().Msg("good bye!")
+	log.Info().Msg("clean up done, goodbye!")
+	return 0
 }
