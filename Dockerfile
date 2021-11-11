@@ -11,13 +11,6 @@ RUN go mod download
 
 # Copy the go source
 COPY main.go main.go
-COPY block.go block.go
-COPY blockchain.go blockchain.go
-COPY utils.go utils.go
-COPY controller.go controller.go
-COPY server.go server.go
-COPY peer.go peer.go
-COPY networking_server.go networking_server.go
 COPY pkg/ pkg/
 
 # Build
