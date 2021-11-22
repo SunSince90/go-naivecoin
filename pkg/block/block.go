@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"time"
 
 	"github.com/SunSince90/go-naivecoin/pkg/pb"
 )
@@ -13,20 +12,6 @@ import (
 const (
 	genesisBlockData string = "this is the genesis block!"
 )
-
-// NewBlock creates a new block with the given parameters, creates a hash
-// of its data and returns it.
-func NewBlock(data string, prevBlock *pb.Block) *pb.Block {
-	b := &pb.Block{
-		Index:             prevBlock.Index + 1,
-		Timestamp:         time.Now().Unix(),
-		PreviousBlockHash: prevBlock.Hash,
-		Data:              data,
-	}
-
-	b.Hash = calculateHash(b)
-	return b
-}
 
 // calculateHash calculates and returns the sha256 of the provided block.
 func calculateHash(block *pb.Block) []byte {
@@ -41,8 +26,6 @@ func calculateHash(block *pb.Block) []byte {
 			binary.LittleEndian.PutUint64(bytesVal, uint64(block.Timestamp))
 			return bytesVal
 		}(),
-		// fromInt64ToBytes(block.Index),
-		// fromInt64ToBytes(block.Timestamp),
 		block.PreviousBlockHash,
 		[]byte(block.Data),
 	}, []byte{})
@@ -71,10 +54,6 @@ func validateBlock(block, prevBlock *pb.Block) error {
 
 	if !bytes.Equal(block.PreviousBlockHash, prevBlock.Hash) {
 		return fmt.Errorf("previous block hash does not match")
-	}
-
-	if !bytes.Equal(block.Hash, calculateHash(block)) {
-		return fmt.Errorf("hash is invalid")
 	}
 
 	return nil
