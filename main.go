@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"os"
 	"os/signal"
@@ -16,15 +18,34 @@ import (
 	"github.com/SunSince90/go-naivecoin/pkg/servers"
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
+	"gopkg.in/yaml.v3"
 )
+
+const (
+	defaultConsensusPath string = "/settings/consensus-settings.yaml"
+)
+
+type ConsensusSettings struct {
+	ProofOfWork *block.ProofOfWorkSettings `yaml:"proofOfWork"`
+}
 
 func main() {
 	os.Exit(run())
 }
 
 func run() int {
+	var consensusPath string
+	flag.StringVar(&consensusPath, "consensus-settings", defaultConsensusPath, "the path to where the consensus settings are stored.")
+	flag.Parse()
+
 	log := zerolog.New(os.Stderr).With().Timestamp().Logger()
 	log.Info().Msg("starting...")
+
+	consensusSettings, err := getConsensusSettings(consensusPath)
+	if err != nil {
+		log.Err(err).Msg("could not load consensus settings correctly")
+		return 4
+	}
 
 	myip := os.Getenv("IP")
 	if myip == "" {
@@ -37,9 +58,12 @@ func run() int {
 	genBlock := make(chan *pb.Block, 10)
 
 	// create structures
-	blockchain := block.NewBlockChain()
-	publicServer := servers.NewPublicServer(blockchain, genBlock)
+	// TODO: this needs to be adapted with proof of stake in future
+	bf := block.NewBlockFactory(block.WithProofOfWork(consensusSettings.ProofOfWork))
+	blockchain := bf.NewBlockChain()
+	publicServer := servers.NewPublicServer(blockchain, genBlock, bf)
 	probesServer := servers.NewProbesServer(blockchain)
+	commServer := servers.NewPeerCommunicationServer(blockchain)
 	grpcServer := grpc.NewServer()
 	peerManager := peers.NewPeersManager(blockchain)
 	mgr, err := controllers.NewControllerManager()
@@ -58,7 +82,7 @@ func run() int {
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
 	wg := sync.WaitGroup{}
-	wg.Add(5)
+	wg.Add(6)
 
 	go func() {
 		defer wg.Done()
@@ -91,7 +115,6 @@ func run() int {
 		}
 		log.Info().Msg("serving peer communications...")
 
-		commServer := servers.NewPeerCommunicationServer(blockchain, genBlock)
 		pb.RegisterPeerCommunicationServer(grpcServer, commServer)
 		if err := grpcServer.Serve(lis); err != nil {
 			log.Err(err).Msg("could not serve communication server")
@@ -108,6 +131,11 @@ func run() int {
 		}
 
 		close(peerEvents)
+	}()
+
+	go func() {
+		defer wg.Done()
+		commServer.ServeSubscriptions(genBlock)
 	}()
 
 	<-stopChan
@@ -133,4 +161,19 @@ func run() int {
 	wg.Wait()
 	log.Info().Msg("clean up done, goodbye!")
 	return 0
+}
+
+func getConsensusSettings(filePath string) (*ConsensusSettings, error) {
+	csBytes, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: update this for proof of stake as well
+	var consesusSettings ConsensusSettings
+	if err := yaml.Unmarshal(csBytes, &consesusSettings); err != nil {
+		return nil, err
+	}
+
+	return &consesusSettings, nil
 }
