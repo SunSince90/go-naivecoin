@@ -18,6 +18,7 @@ type PeersManager struct {
 	lock       sync.Mutex
 }
 
+// NewPeersManager creates and returns a new instance of the PeersManager.
 func NewPeersManager(blockchain *block.BlockChain) *PeersManager {
 	return &PeersManager{
 		peers:      map[string]*Peer{},
@@ -44,6 +45,10 @@ func (m *PeersManager) addPeer(addCtx context.Context, peer *Peer) error {
 	canc()
 
 	myLastBlock := m.blockchain.GetLastBlock()
+
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
 	switch diff := myLastBlock.Index - peerLastBlock.Index; {
 	case diff == 0:
 		// we have the same index
@@ -65,15 +70,13 @@ func (m *PeersManager) addPeer(addCtx context.Context, peer *Peer) error {
 		canc()
 
 		if err := m.blockchain.ReplaceWith(peerBlockChain); err != nil {
-			return fmt.Errorf("could not replace chain with peer's chain")
+			return err
 		}
 	case diff > 0:
 		// the peer's last block is lower than mine. I don't need to sync.
 	}
 
-	m.lock.Lock()
 	m.peers[peer.Name] = peer
-	m.lock.Unlock()
 
 	log.Info().Str("peer-name", peer.Name).Msg("added peer")
 
@@ -100,6 +103,8 @@ func (m *PeersManager) removePeer(name string) (*Peer, error) {
 	return peer, nil
 }
 
+// ListenPeerEvents listens on the provided channel for peer events, e.g. new
+// or deleted peers.
 func (m *PeersManager) ListenPeerEvents(peerEvents chan *PeerEvent) {
 	// This context will be passed to each addPeer and used as a main
 	// context: when the user wants to stop the program they will also close

@@ -11,17 +11,19 @@ import (
 // PublicServer exposes some information about the pod and that should be equal
 // to all pods, e.g. the blocks or blockchain.
 type PublicServer struct {
-	FiberApp   *fiber.App
-	genBlock   chan *pb.Block
-	blockchain *block.BlockChain
+	FiberApp     *fiber.App
+	genBlock     chan *pb.Block
+	blockchain   *block.BlockChain
+	blockFactory *block.BlockFactory
 }
 
 // NewPublicServer creates and returns a new instance of the PublicServer.
-func NewPublicServer(blockchain *block.BlockChain, genBlock chan *pb.Block) *PublicServer {
+func NewPublicServer(blockchain *block.BlockChain, genBlock chan *pb.Block, blockFactory *block.BlockFactory) *PublicServer {
 	server := &PublicServer{
-		FiberApp:   fiber.New(fiber.Config{ReadTimeout: 30 * time.Second}),
-		genBlock:   genBlock,
-		blockchain: blockchain,
+		FiberApp:     fiber.New(fiber.Config{ReadTimeout: 30 * time.Second}),
+		genBlock:     genBlock,
+		blockchain:   blockchain,
+		blockFactory: blockFactory,
 	}
 
 	// set up the fiber server
@@ -53,7 +55,7 @@ func (n *PublicServer) handlePostBlocks(c *fiber.Ctx) error {
 		return c.SendStatus(fiber.ErrBadRequest.Code)
 	}
 
-	block := block.NewBlock(string(c.Body()), n.blockchain.GetLastBlock())
+	block := n.blockFactory.NewBlock(string(c.Body()), n.blockchain.GetLastBlock())
 	if err := n.blockchain.PushBlock(block); err != nil {
 		c.Send([]byte(err.Error()))
 		return c.SendStatus(fiber.ErrBadRequest.Code)
