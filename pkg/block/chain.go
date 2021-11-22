@@ -3,32 +3,25 @@ package block
 import (
 	"bytes"
 	"fmt"
+	"math/big"
 	"sync"
 
 	"github.com/SunSince90/go-naivecoin/pkg/pb"
 	"github.com/rs/zerolog/log"
 )
 
-// BlockChain simply contains a slice of Block-s.
+// BlockChain manages a slice of Blocks.
 //
 // TODO: explore persistency on future commits.
 type BlockChain struct {
-	chain []*pb.Block
-
-	lock sync.Mutex
+	chain                []*pb.Block
+	pow                  *ProofOfWork
+	cumulativeDifficulty *big.Int
+	lock                 sync.Mutex
 }
 
-// NewBlockChain returns a new block chain.
-func NewBlockChain() *BlockChain {
-	genesis := newGenesisBlock()
-
-	return &BlockChain{
-		chain: []*pb.Block{genesis},
-		lock:  sync.Mutex{},
-	}
-}
-
-// PushBlock pushes the provided block to the blockchain.
+// PushBlock validates the the provided block and -- if successful -- pushes it
+// to the blockchain.
 func (b *BlockChain) PushBlock(block *pb.Block) error {
 	if block == nil {
 		return fmt.Errorf("block is nil")
@@ -45,15 +38,59 @@ func (b *BlockChain) PushBlock(block *pb.Block) error {
 		return err
 	}
 
+	if b.pow != nil {
+		if err := b.pow.validateBlockHash(block); err != nil {
+			return err
+		}
+		if err := b.pow.validateBlockTimestamps(block, lastBlock); err != nil {
+			return err
+		}
+	}
+
 	b.chain = append(b.chain, block)
+
+	if b.pow != nil {
+		exp := big.NewInt(0).Exp(big.NewInt(2), big.NewInt(block.Difficulty), nil)
+		b.cumulativeDifficulty = b.cumulativeDifficulty.Add(b.cumulativeDifficulty, exp)
+
+		if block.Index%int64(b.pow.blockGenInt) == 0 {
+			b.pow.adjustDifficulty(b.chain)
+		}
+	}
 
 	return nil
 }
 
-// ReplaceWith replaces the chain with the one provided as argument.
+// ReplaceWith validates the given chain and replaces the one stored inside
+// the blockchain with the the one in the parameter.
 func (b *BlockChain) ReplaceWith(newChain []*pb.Block) error {
+
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	if b.pow != nil {
+		cdiff, err := b.pow.validateChain(newChain)
+		if err != nil {
+			return err
+		}
+
+		switch b.cumulativeDifficulty.Cmp(cdiff) {
+		case 0:
+			log.Info().Msg("peer's chain is valid and has the same cumulative difficulty as mine: stopping here")
+			return nil
+		case 1:
+			// This should actually never happen, but let's cover this case anyways
+			return fmt.Errorf("peer's cumulative difficulty is lower than mine, stopping here")
+		default: // case -1
+			b.chain = newChain
+			log.Info().Msg("chain replaced with my peer's chain")
+			return nil
+		}
+	}
+
+	// For non proof of work
 	// ValidateChain may take a while, so we better check the len-s first
-	if len(newChain) <= len(b.chain) {
+	if len(newChain) < len(b.chain) {
 		return fmt.Errorf("new chain is not longer than the current one")
 	}
 
@@ -61,12 +98,12 @@ func (b *BlockChain) ReplaceWith(newChain []*pb.Block) error {
 		return err
 	}
 
-	b.lock.Lock()
-	b.chain = newChain
-	b.lock.Unlock()
+	if len(newChain) == len(b.chain) {
+		log.Info().Msg("peer chain is valid and same length as mine, stopping here...")
+		return nil
+	}
 
-	log.Info().Msg("chain replaced")
-
+	log.Info().Msg("chain replaced with my peer's chain")
 	return nil
 }
 
